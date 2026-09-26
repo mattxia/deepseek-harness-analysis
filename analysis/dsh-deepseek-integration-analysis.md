@@ -15,20 +15,20 @@ dsh 与 DeepSeek 的对接分为三层：agent 循环（消费者）、LLM 服�
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Loop as Agent 循环<br>(dsh-agent-loop)
+    participant Agent as Agent 循环<br>(dsh-agent-loop)
     participant RT as LlmRuntime<br>(dsh-llm)
     participant AD as DeepSeekAdapter<br>(dsh-llm-deepseek)
     participant API as DeepSeek API<br>/chat/completions
 
-    Note over Loop,RT: ① 请求构建
-    Loop->>Loop: buildRequest()<br>agent/request waterfall 提出 seedConfig
-    Loop->>RT: prepareCall(request)
+    Note over Agent,RT: ① 请求构建
+    Agent->>Agent: buildRequest()<br>agent/request waterfall 提出 seedConfig
+    Agent->>RT: prepareCall(request)
     Note right of RT: 校验模型存在 / 物化 defaultMaxTokens<br>与默认 reasoning effort / deepFreeze
-    RT-->>Loop: PreparedCall
-    Loop->>Loop: markAgentLoopRequest()<br>记录 request/header、request/context 事件
+    RT-->>Agent: PreparedCall
+    Agent->>Agent: markAgentLoopRequest()<br>记录 request/header、request/context 事件
 
-    Note over Loop,AD: ② 发起流式调用
-    Loop->>RT: stream(冻结请求)
+    Note over Agent,AD: ② 发起流式调用
+    Agent->>RT: stream(冻结请求)
     Note right of RT: llm/stream waterfall<br>中间件可拦截
     RT->>AD: adapter.stream()
     AD->>AD: 解析连接快照<br>resolveApiKey(): credentials ?? $DEEPSEEK_API_KEY
@@ -39,27 +39,27 @@ sequenceDiagram
     alt 非 2xx
         API-->>AD: WireError
         AD->>AD: httpErrorCode(): AUTH / RATE_LIMIT /<br>CONTEXT_WINDOW_EXCEEDED / SERVER
-        AD-->>Loop: error finish chunk（LlmError）
-        Loop->>Loop: agent/request-error waterfall<br>llm-retry 指数退避后重试
+        AD-->>Agent: error finish chunk（LlmError）
+        Agent->>Agent: agent/request-error waterfall<br>llm-retry 指数退避后重试
     else 2xx
         API-->>AD: SSE delta 流
     end
 
-    Note over AD,Loop: ④ SSE 解析与流翻译
+    Note over AD,Agent: ④ SSE 解析与流翻译
     AD->>AD: parseSse(): [DONE] 哨兵<br>EOF 无 [DONE] 则 STREAM_CLOSED
     AD->>AD: translate() → StreamChunk<br>reasoning/text/tool-call delta 按 index 聚合
     AD->>AD: mapUsage(): inputTokens = prompt_tokens - cacheRead<br>block-end/usage/finish 延迟到 [DONE]
     AD-->>RT: StreamChunk 流
-    RT-->>Loop: 逐 chunk 透传
-    Loop->>Loop: session.append('assistant/chunk')<br>BlockAssembler 组装
+    RT-->>Agent: 逐 chunk 透传
+    Agent->>Agent: session.append('assistant/chunk')<br>BlockAssembler 组装
 
-    Note over Loop,API: ⑤ finish 与工具循环
+    Note over Agent,API: ⑤ finish 与工具循环
     alt finish: tool-calls
-        Loop->>Loop: executeToolCalls()<br>tool-result 回灌下一轮请求
+        Agent->>Agent: executeToolCalls()<br>tool-result 回灌下一轮请求
     else finish: stop
-        Loop->>Loop: 发 assistant/message 事件（含 usage）<br>循环结束
+        Agent->>Agent: 发 assistant/message 事件（含 usage）<br>循环结束
     else finish: error / aborted
-        Loop->>Loop: agent/request-error → 重试或抛 LlmError
+        Agent->>Agent: agent/request-error → 重试或抛 LlmError
     end
 ```
 
